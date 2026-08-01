@@ -178,16 +178,12 @@ userSchema.index(
 // This protects against inconsistent API input.
 userSchema.pre(
   "validate",
-  function normalizeEmail(next) {
+  function normalizeEmail() {
     if (this.email) {
-      this.email = String(
-        this.email
-      )
+      this.email = String(this.email)
         .trim()
         .toLowerCase();
     }
-
-    next();
   }
 );
 
