@@ -1,102 +1,587 @@
-const nodemailer = require(
-  "nodemailer"
-);
-
-function requireEmailEnvironment() {
-  const requiredVariables = [
-    "SMTP_HOST",
-    "SMTP_PORT",
-    "SMTP_USER",
-    "SMTP_PASS",
-    "EMAIL_FROM",
-  ];
-
-  const missingVariables =
-    requiredVariables.filter(
-      (variableName) =>
-        !process.env[
-          variableName
-        ]
-    );
-
-  if (
-    missingVariables.length > 0
-  ) {
-    throw new Error(
-      `Missing email environment variables: ${missingVariables.join(
-        ", "
-      )}`
-    );
-  }
-}
-
 function escapeHtml(value) {
   return String(value || "")
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
-    .replaceAll(
-      "'",
-      "&#039;"
+    .replaceAll("'", "&#039;");
+}
+
+function getSenderDetails() {
+  const configuredAddress = String(
+    process.env.EMAIL_FROM_ADDRESS || ""
+  )
+    .trim()
+    .toLowerCase();
+
+  const configuredName = String(
+    process.env.EMAIL_FROM_NAME ||
+      "ResumeAI"
+  ).trim();
+
+  if (configuredAddress) {
+    return {
+      name:
+        configuredName || "ResumeAI",
+      email: configuredAddress,
+    };
+  }
+
+  // Supports:
+  // EMAIL_FROM=ResumeAI <email@example.com>
+  const legacyFrom = String(
+    process.env.EMAIL_FROM || ""
+  ).trim();
+
+  const match = legacyFrom.match(
+    /^(.*?)\s*<([^<>@\s]+@[^<>@\s]+)>$/
+  );
+
+  if (match) {
+    return {
+      name:
+        match[1].trim() ||
+        "ResumeAI",
+
+      email: match[2]
+        .trim()
+        .toLowerCase(),
+    };
+  }
+
+  // Supports:
+  // EMAIL_FROM=email@example.com
+  if (
+    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(
+      legacyFrom
+    )
+  ) {
+    return {
+      name:
+        configuredName || "ResumeAI",
+
+      email:
+        legacyFrom.toLowerCase(),
+    };
+  }
+
+  throw new Error(
+    "A valid EMAIL_FROM_ADDRESS or EMAIL_FROM is required"
+  );
+}
+
+function validateEmail(value) {
+  const email = String(value || "")
+    .trim()
+    .toLowerCase();
+
+  if (
+    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(
+      email
+    )
+  ) {
+    throw new Error(
+      "A valid recipient email is required"
     );
+  }
+
+  return email;
 }
 
-function createTransporter() {
-  requireEmailEnvironment();
+function createOtpEmailTemplate({
+  name,
+  otp,
+  expiresInMinutes,
+  type,
+}) {
+  const safeName = escapeHtml(
+    name || "User"
+  );
 
-  const port =
-    Number(
-      process.env.SMTP_PORT
-    ) || 587;
+  const safeOtp = escapeHtml(otp);
 
-  const secure =
-    process.env.SMTP_SECURE !==
-    undefined
-      ? String(
-          process.env.SMTP_SECURE
-        ).toLowerCase() ===
-        "true"
-      : port === 465;
+  const safeExpiry = Number(
+    expiresInMinutes
+  );
 
-  return nodemailer.createTransport(
-    {
-      host:
-        process.env.SMTP_HOST,
+  const expiryMinutes =
+    Number.isFinite(safeExpiry) &&
+    safeExpiry > 0
+      ? safeExpiry
+      : 10;
 
-      port,
-      secure,
+  const isPasswordReset =
+    type === "password-reset";
 
-      auth: {
-        user:
-          process.env.SMTP_USER,
+  const title = isPasswordReset
+    ? "Reset Your Password"
+    : "Verify Your Email";
 
-        pass:
-          process.env.SMTP_PASS,
-      },
+  const description = isPasswordReset
+    ? "Use the verification code below to reset your ResumeAI password."
+    : "Use the verification code below to verify your ResumeAI email address.";
 
-      connectionTimeout: 15000,
-      greetingTimeout: 15000,
-      socketTimeout: 20000,
+  const securityMessage =
+    isPasswordReset
+      ? "If you did not request a password reset, you can safely ignore this email."
+      : "If you did not create a ResumeAI account, you can safely ignore this email.";
 
-      tls: {
-        minVersion: "TLSv1.2",
-      },
+  return `
+    <!doctype html>
+
+    <html lang="en">
+      <head>
+        <meta charset="utf-8" />
+
+        <meta
+          name="viewport"
+          content="width=device-width, initial-scale=1"
+        />
+
+        <title>${title}</title>
+      </head>
+
+      <body
+        style="
+          margin: 0;
+          padding: 0;
+          background-color: #0f172a;
+          font-family:
+            Inter,
+            Arial,
+            Helvetica,
+            sans-serif;
+          color: #f8fafc;
+        "
+      >
+        <table
+          role="presentation"
+          width="100%"
+          cellspacing="0"
+          cellpadding="0"
+          border="0"
+          style="
+            width: 100%;
+            background-color: #0f172a;
+          "
+        >
+          <tr>
+            <td
+              align="center"
+              style="
+                padding: 40px 16px;
+              "
+            >
+              <table
+                role="presentation"
+                width="100%"
+                cellspacing="0"
+                cellpadding="0"
+                border="0"
+                style="
+                  width: 100%;
+                  max-width: 600px;
+                  overflow: hidden;
+                  border: 1px solid #334155;
+                  border-radius: 24px;
+                  background-color: #1e293b;
+                  box-shadow:
+                    0 24px 60px
+                    rgba(0, 0, 0, 0.35);
+                "
+              >
+                <tr>
+                  <td
+                    style="
+                      height: 8px;
+                      background:
+                        linear-gradient(
+                          90deg,
+                          #4f46e5,
+                          #7c3aed,
+                          #06b6d4
+                        );
+                    "
+                  ></td>
+                </tr>
+
+                <tr>
+                  <td
+                    style="
+                      padding: 36px;
+                    "
+                  >
+                    <table
+                      role="presentation"
+                      cellspacing="0"
+                      cellpadding="0"
+                      border="0"
+                    >
+                      <tr>
+                        <td
+                          style="
+                            border-radius: 16px;
+                            background:
+                              linear-gradient(
+                                135deg,
+                                #4f46e5,
+                                #7c3aed
+                              );
+                            padding:
+                              13px 18px;
+                            color: #ffffff;
+                            font-size: 21px;
+                            font-weight: 800;
+                            letter-spacing:
+                              -0.4px;
+                          "
+                        >
+                          ResumeAI
+                        </td>
+                      </tr>
+                    </table>
+
+                    <h1
+                      style="
+                        margin:
+                          30px 0 12px;
+                        color: #f8fafc;
+                        font-size: 30px;
+                        line-height: 1.25;
+                        letter-spacing:
+                          -0.7px;
+                      "
+                    >
+                      ${title}
+                    </h1>
+
+                    <p
+                      style="
+                        margin: 0;
+                        color: #cbd5e1;
+                        font-size: 16px;
+                        line-height: 1.7;
+                      "
+                    >
+                      Hello ${safeName},
+                    </p>
+
+                    <p
+                      style="
+                        margin:
+                          14px 0 0;
+                        color: #cbd5e1;
+                        font-size: 16px;
+                        line-height: 1.7;
+                      "
+                    >
+                      ${description}
+                    </p>
+
+                    <div
+                      style="
+                        margin:
+                          30px 0 22px;
+                        border:
+                          1px solid
+                          rgba(
+                            129,
+                            140,
+                            248,
+                            0.4
+                          );
+                        border-radius: 20px;
+                        background-color:
+                          #312e81;
+                        padding:
+                          26px 18px;
+                        text-align: center;
+                      "
+                    >
+                      <p
+                        style="
+                          margin:
+                            0 0 10px;
+                          color: #c7d2fe;
+                          font-size: 13px;
+                          font-weight: 700;
+                          letter-spacing:
+                            2px;
+                          text-transform:
+                            uppercase;
+                        "
+                      >
+                        Verification code
+                      </p>
+
+                      <p
+                        style="
+                          margin: 0;
+                          color: #ffffff;
+                          font-size: 42px;
+                          font-weight: 900;
+                          letter-spacing:
+                            12px;
+                          line-height: 1.2;
+                        "
+                      >
+                        ${safeOtp}
+                      </p>
+                    </div>
+
+                    <div
+                      style="
+                        border:
+                          1px solid
+                          #334155;
+                        border-radius: 14px;
+                        background-color:
+                          #0f172a;
+                        padding:
+                          16px 18px;
+                      "
+                    >
+                      <p
+                        style="
+                          margin: 0;
+                          color: #94a3b8;
+                          font-size: 14px;
+                          line-height: 1.7;
+                        "
+                      >
+                        This code expires in
+                        <strong
+                          style="
+                            color: #c7d2fe;
+                          "
+                        >
+                          ${expiryMinutes}
+                          minutes
+                        </strong>.
+                        Do not share this code
+                        with anyone.
+                      </p>
+                    </div>
+
+                    <p
+                      style="
+                        margin:
+                          24px 0 0;
+                        color: #94a3b8;
+                        font-size: 13px;
+                        line-height: 1.7;
+                      "
+                    >
+                      ${securityMessage}
+                    </p>
+
+                    <div
+                      style="
+                        margin-top: 30px;
+                        border-top:
+                          1px solid
+                          #334155;
+                        padding-top:
+                          20px;
+                      "
+                    >
+                      <p
+                        style="
+                          margin: 0;
+                          color: #64748b;
+                          font-size: 12px;
+                          line-height: 1.6;
+                        "
+                      >
+                        This is an automated
+                        security email from
+                        ResumeAI. Please do not
+                        reply to this message.
+                      </p>
+                    </div>
+                  </td>
+                </tr>
+              </table>
+
+              <p
+                style="
+                  margin:
+                    20px 0 0;
+                  color: #64748b;
+                  font-size: 12px;
+                "
+              >
+                © ${new Date().getFullYear()}
+                ResumeAI. All rights reserved.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </body>
+    </html>
+  `;
+}
+
+async function sendBrevoEmail({
+  to,
+  toName = "",
+  subject,
+  htmlContent,
+  textContent = "",
+}) {
+  const apiKey = String(
+    process.env.BREVO_API_KEY || ""
+  ).trim();
+
+  if (!apiKey) {
+    throw new Error(
+      "BREVO_API_KEY is not configured"
+    );
+  }
+
+  const recipientEmail =
+    validateEmail(to);
+
+  const safeSubject = String(
+    subject || ""
+  ).trim();
+
+  if (!safeSubject) {
+    throw new Error(
+      "Email subject is required"
+    );
+  }
+
+  const safeHtml = String(
+    htmlContent || ""
+  ).trim();
+
+  if (!safeHtml) {
+    throw new Error(
+      "Email HTML content is required"
+    );
+  }
+
+  const sender =
+    getSenderDetails();
+
+  const recipient = {
+    email: recipientEmail,
+  };
+
+  const safeRecipientName = String(
+    toName || ""
+  ).trim();
+
+  if (safeRecipientName) {
+    recipient.name =
+      safeRecipientName;
+  }
+
+  const payload = {
+    sender,
+    to: [recipient],
+    subject: safeSubject,
+    htmlContent: safeHtml,
+  };
+
+  const safeText = String(
+    textContent || ""
+  ).trim();
+
+  if (safeText) {
+    payload.textContent =
+      safeText;
+  }
+
+  let response;
+
+  try {
+    response = await fetch(
+      "https://api.brevo.com/v3/smtp/email",
+      {
+        method: "POST",
+
+        headers: {
+          accept:
+            "application/json",
+
+          "content-type":
+            "application/json",
+
+          "api-key": apiKey,
+        },
+
+        body:
+          JSON.stringify(payload),
+
+        signal:
+          AbortSignal.timeout(
+            20000
+          ),
+      }
+    );
+  } catch (error) {
+    if (
+      error.name ===
+        "TimeoutError" ||
+      error.name ===
+        "AbortError"
+    ) {
+      const timeoutError =
+        new Error(
+          "Brevo API connection timed out"
+        );
+
+      timeoutError.status = 504;
+
+      throw timeoutError;
     }
-  );
-}
 
-async function verifyEmailConnection() {
-  const transporter =
-    createTransporter();
+    throw error;
+  }
 
-  await transporter.verify();
+  const responseText =
+    await response.text();
 
-  console.log(
-    "Brevo SMTP connection successful"
-  );
+  let responseData = {};
 
-  return true;
+  if (responseText) {
+    try {
+      responseData =
+        JSON.parse(responseText);
+    } catch {
+      responseData = {
+        raw: responseText,
+      };
+    }
+  }
+
+  if (!response.ok) {
+    console.error(
+      "Brevo API request failed:",
+      {
+        status:
+          response.status,
+
+        message:
+          responseData.message ||
+          "Unknown Brevo error",
+      }
+    );
+
+    const error = new Error(
+      responseData.message ||
+        "Unable to send email"
+    );
+
+    error.status =
+      response.status;
+
+    throw error;
+  }
+
+  return responseData;
 }
 
 async function sendVerificationEmail({
@@ -105,181 +590,37 @@ async function sendVerificationEmail({
   otp,
   expiresInMinutes = 10,
 }) {
-  if (!to || !otp) {
+  const safeOtp = String(
+    otp || ""
+  ).trim();
+
+  if (!/^\d{6}$/.test(safeOtp)) {
     throw new Error(
-      "Verification email and OTP are required"
+      "Verification OTP must contain 6 digits"
     );
   }
 
-  const transporter =
-    createTransporter();
-
-  const safeName =
-    escapeHtml(name || "User");
-
-  const safeOtp =
-    escapeHtml(otp);
-
-  const info =
-    await transporter.sendMail({
-      from:
-        process.env.EMAIL_FROM,
-
-      to,
-
-      subject:
-        "Verify your ResumeAI email",
-
-      text: `
-Hello ${name || "User"},
-
-Your ResumeAI email verification code is:
-
-${otp}
-
-This code expires in ${expiresInMinutes} minutes.
-
-If you did not create a ResumeAI account, ignore this email.
-      `.trim(),
-
-      html: `
-        <!doctype html>
-
-        <html lang="en">
-          <head>
-            <meta charset="utf-8" />
-
-            <meta
-              name="viewport"
-              content="width=device-width, initial-scale=1"
-            />
-
-            <title>
-              Verify your ResumeAI email
-            </title>
-          </head>
-
-          <body
-            style="
-              margin: 0;
-              padding: 0;
-              background: #f1f5f9;
-              font-family: Arial, sans-serif;
-              color: #0f172a;
-            "
-          >
-            <div
-              style="
-                max-width: 600px;
-                margin: 0 auto;
-                padding: 32px 16px;
-              "
-            >
-              <div
-                style="
-                  background: #ffffff;
-                  border-radius: 20px;
-                  padding: 32px;
-                  box-shadow:
-                    0 15px 40px
-                    rgba(15, 23, 42, 0.08);
-                "
-              >
-                <div
-                  style="
-                    display: inline-block;
-                    padding: 12px 16px;
-                    border-radius: 14px;
-                    background:
-                      linear-gradient(
-                        135deg,
-                        #4f46e5,
-                        #7c3aed
-                      );
-                    color: #ffffff;
-                    font-size: 20px;
-                    font-weight: 700;
-                  "
-                >
-                  ResumeAI
-                </div>
-
-                <h1
-                  style="
-                    margin: 28px 0 12px;
-                    font-size: 28px;
-                    line-height: 1.3;
-                  "
-                >
-                  Verify your email
-                </h1>
-
-                <p
-                  style="
-                    color: #475569;
-                    font-size: 16px;
-                    line-height: 1.7;
-                  "
-                >
-                  Hello ${safeName},
-                </p>
-
-                <p
-                  style="
-                    color: #475569;
-                    font-size: 16px;
-                    line-height: 1.7;
-                  "
-                >
-                  Use this code to verify
-                  your ResumeAI account:
-                </p>
-
-                <div
-                  style="
-                    margin: 24px 0;
-                    padding: 20px;
-                    border-radius: 16px;
-                    background: #eef2ff;
-                    color: #4338ca;
-                    font-size: 34px;
-                    font-weight: 800;
-                    text-align: center;
-                    letter-spacing: 10px;
-                  "
-                >
-                  ${safeOtp}
-                </div>
-
-                <p
-                  style="
-                    color: #64748b;
-                    font-size: 14px;
-                    line-height: 1.7;
-                  "
-                >
-                  This code expires in
-                  ${expiresInMinutes} minutes.
-                  If you did not create this
-                  account, ignore this email.
-                </p>
-              </div>
-            </div>
-          </body>
-        </html>
-      `,
+  const html =
+    createOtpEmailTemplate({
+      name,
+      otp: safeOtp,
+      expiresInMinutes,
+      type: "email-verification",
     });
 
-  return {
-    messageId:
-      info.messageId,
+  return sendBrevoEmail({
+    to,
+    toName: name,
 
-    accepted:
-      info.accepted,
+    subject:
+      "Verify your ResumeAI email",
 
-    rejected:
-      info.rejected,
-  };
+    htmlContent: html,
+
+    textContent:
+      `Your ResumeAI verification code is ${safeOtp}. ` +
+      `It expires in ${expiresInMinutes} minutes.`,
+  });
 }
 
 async function sendPasswordResetEmail({
@@ -288,197 +629,40 @@ async function sendPasswordResetEmail({
   otp,
   expiresInMinutes = 10,
 }) {
-  if (!to || !otp) {
+  const safeOtp = String(
+    otp || ""
+  ).trim();
+
+  if (!/^\d{6}$/.test(safeOtp)) {
     throw new Error(
-      "Reset email and OTP are required"
+      "Password reset OTP must contain 6 digits"
     );
   }
 
-  const transporter =
-    createTransporter();
-
-  const safeName =
-    escapeHtml(name || "User");
-
-  const safeOtp =
-    escapeHtml(otp);
-
-  const info =
-    await transporter.sendMail({
-      from:
-        process.env.EMAIL_FROM,
-
-      to,
-
-      subject:
-        "Reset your ResumeAI password",
-
-      text: `
-Hello ${name || "User"},
-
-Your ResumeAI password reset code is:
-
-${otp}
-
-This code expires in ${expiresInMinutes} minutes.
-
-If you did not request a password reset, ignore this email. Your password has not been changed.
-      `.trim(),
-
-      html: `
-        <!doctype html>
-
-        <html lang="en">
-          <head>
-            <meta charset="utf-8" />
-
-            <meta
-              name="viewport"
-              content="width=device-width, initial-scale=1"
-            />
-
-            <title>
-              Reset your ResumeAI password
-            </title>
-          </head>
-
-          <body
-            style="
-              margin: 0;
-              padding: 0;
-              background: #f1f5f9;
-              font-family: Arial, sans-serif;
-              color: #0f172a;
-            "
-          >
-            <div
-              style="
-                max-width: 600px;
-                margin: 0 auto;
-                padding: 32px 16px;
-              "
-            >
-              <div
-                style="
-                  background: #ffffff;
-                  border-radius: 20px;
-                  padding: 32px;
-                  box-shadow:
-                    0 15px 40px
-                    rgba(15, 23, 42, 0.08);
-                "
-              >
-                <div
-                  style="
-                    display: inline-block;
-                    padding: 12px 16px;
-                    border-radius: 14px;
-                    background:
-                      linear-gradient(
-                        135deg,
-                        #4f46e5,
-                        #7c3aed
-                      );
-                    color: #ffffff;
-                    font-size: 20px;
-                    font-weight: 700;
-                  "
-                >
-                  ResumeAI
-                </div>
-
-                <h1
-                  style="
-                    margin: 28px 0 12px;
-                    font-size: 28px;
-                    line-height: 1.3;
-                  "
-                >
-                  Reset your password
-                </h1>
-
-                <p
-                  style="
-                    color: #475569;
-                    font-size: 16px;
-                    line-height: 1.7;
-                  "
-                >
-                  Hello ${safeName},
-                </p>
-
-                <p
-                  style="
-                    color: #475569;
-                    font-size: 16px;
-                    line-height: 1.7;
-                  "
-                >
-                  Use this code to reset your
-                  ResumeAI password:
-                </p>
-
-                <div
-                  style="
-                    margin: 24px 0;
-                    padding: 20px;
-                    border-radius: 16px;
-                    background: #eef2ff;
-                    color: #4338ca;
-                    font-size: 34px;
-                    font-weight: 800;
-                    text-align: center;
-                    letter-spacing: 10px;
-                  "
-                >
-                  ${safeOtp}
-                </div>
-
-                <p
-                  style="
-                    color: #64748b;
-                    font-size: 14px;
-                    line-height: 1.7;
-                  "
-                >
-                  This code expires in
-                  ${expiresInMinutes} minutes.
-                </p>
-
-                <p
-                  style="
-                    margin-top: 18px;
-                    color: #64748b;
-                    font-size: 14px;
-                    line-height: 1.7;
-                  "
-                >
-                  If you did not request this,
-                  ignore this email. Your
-                  existing password has not
-                  been changed.
-                </p>
-              </div>
-            </div>
-          </body>
-        </html>
-      `,
+  const html =
+    createOtpEmailTemplate({
+      name,
+      otp: safeOtp,
+      expiresInMinutes,
+      type: "password-reset",
     });
 
-  return {
-    messageId:
-      info.messageId,
+  return sendBrevoEmail({
+    to,
+    toName: name,
 
-    accepted:
-      info.accepted,
+    subject:
+      "Reset your ResumeAI password",
 
-    rejected:
-      info.rejected,
-  };
+    htmlContent: html,
+
+    textContent:
+      `Your ResumeAI password reset code is ${safeOtp}. ` +
+      `It expires in ${expiresInMinutes} minutes.`,
+  });
 }
 
 module.exports = {
-  verifyEmailConnection,
   sendVerificationEmail,
   sendPasswordResetEmail,
 };
