@@ -4,19 +4,25 @@ const jwt = require("jsonwebtoken");
 
 const User = require("../models/User");
 const Resume = require("../models/Resume");
-const ResumeBuilder = require("../models/ResumeBuilder");
-const CoachConversation = require("../models/CoachConversation");
-
-const {
-  sendPasswordResetEmail,
-} = require("../services/emailService");
+const ResumeBuilder = require(
+  "../models/ResumeBuilder"
+);
+const CoachConversation = require(
+  "../models/CoachConversation"
+);
 
 const {
   sendVerificationEmail,
+  sendPasswordResetEmail,
 } = require("../services/emailService");
 
 const OTP_EXPIRY_MINUTES = 10;
 const RESEND_COOLDOWN_SECONDS = 60;
+const MAX_RESET_ATTEMPTS = 5;
+
+/* -------------------------------------------------------------------------- */
+/*                                HELPERS                                     */
+/* -------------------------------------------------------------------------- */
 
 function normalizeEmail(value) {
   return String(value || "")
@@ -31,9 +37,13 @@ function isValidEmail(email) {
 }
 
 function validatePassword(password) {
+  const value = String(
+    password || ""
+  );
+
   const failures = [];
 
-  if (password.length < 15) {
+  if (value.length < 15) {
     failures.push(
       "at least 15 characters"
     );
@@ -41,7 +51,7 @@ function validatePassword(password) {
 
   if (
     Buffer.byteLength(
-      password,
+      value,
       "utf8"
     ) > 72
   ) {
@@ -50,36 +60,53 @@ function validatePassword(password) {
     );
   }
 
-  if (!/[a-z]/.test(password)) {
+  if (!/[a-z]/.test(value)) {
     failures.push(
       "one lowercase letter"
     );
   }
 
-  if (!/[A-Z]/.test(password)) {
+  if (!/[A-Z]/.test(value)) {
     failures.push(
       "one uppercase letter"
     );
   }
 
-  if (!/\d/.test(password)) {
+  if (!/[0-9]/.test(value)) {
     failures.push("one number");
   }
 
   if (
-    !/[^A-Za-z0-9]/.test(password)
+    !/[^A-Za-z0-9]/.test(
+      value
+    )
   ) {
     failures.push(
       "one special character"
     );
   }
 
-  return failures;
+  return {
+    valid:
+      failures.length === 0,
+
+    failures,
+
+    message:
+      failures.length > 0
+        ? `Password must contain ${failures.join(
+            ", "
+          )}.`
+        : "",
+  };
 }
 
 function createOtp() {
   return crypto
-    .randomInt(100000, 1000000)
+    .randomInt(
+      100000,
+      1000000
+    )
     .toString();
 }
 
@@ -90,27 +117,68 @@ function hashOtp(otp) {
     .digest("hex");
 }
 
+function otpMatches(
+  plainOtp,
+  storedHash
+) {
+  if (
+    !plainOtp ||
+    !storedHash
+  ) {
+    return false;
+  }
+
+  try {
+    const suppliedBuffer =
+      Buffer.from(
+        hashOtp(plainOtp),
+        "hex"
+      );
+
+    const storedBuffer =
+      Buffer.from(
+        storedHash,
+        "hex"
+      );
+
+    return (
+      suppliedBuffer.length ===
+        storedBuffer.length &&
+      crypto.timingSafeEqual(
+        suppliedBuffer,
+        storedBuffer
+      )
+    );
+  } catch {
+    return false;
+  }
+}
+
 function createVerificationData() {
   const otp = createOtp();
 
   return {
     otp,
 
-    tokenHash: hashOtp(otp),
+    tokenHash:
+      hashOtp(otp),
 
-    expiresAt: new Date(
-      Date.now() +
-        OTP_EXPIRY_MINUTES *
-          60 *
-          1000
-    ),
+    expiresAt:
+      new Date(
+        Date.now() +
+          OTP_EXPIRY_MINUTES *
+            60 *
+            1000
+      ),
 
     sentAt: new Date(),
   };
 }
 
 function createJwt(user) {
-  if (!process.env.JWT_SECRET) {
+  if (
+    !process.env.JWT_SECRET
+  ) {
     throw new Error(
       "JWT_SECRET is not configured"
     );
@@ -118,7 +186,7 @@ function createJwt(user) {
 
   return jwt.sign(
     {
-      id: user._id,
+      id: user._id.toString(),
     },
     process.env.JWT_SECRET,
     {
@@ -127,31 +195,25 @@ function createJwt(user) {
   );
 }
 
-function createOtp() {
-  return crypto.randomInt(
-    100000,
-    1000000
-  ).toString();
+function safeErrorDetails(error) {
+  return {
+    message:
+      error?.message ||
+      "Unknown error",
+
+    code:
+      error?.code,
+
+    status:
+      error?.status ||
+      error?.statusCode,
+  };
 }
 
-function hashOtp(otp) {
-  return crypto
-    .createHash("sha256")
-    .update(String(otp))
-    .digest("hex");
-}
+/* -------------------------------------------------------------------------- */
+/*                                REGISTER                                    */
+/* -------------------------------------------------------------------------- */
 
-function isStrongPassword(password) {
-  return (
-    password.length >= 8 &&
-    /[a-z]/.test(password) &&
-    /[A-Z]/.test(password) &&
-    /[0-9]/.test(password) &&
-    /[^A-Za-z0-9]/.test(password)
-  );
-}
-
-// REGISTER AND SEND OTP
 exports.register = async (
   req,
   res
@@ -160,56 +222,70 @@ exports.register = async (
 
   try {
     const name = String(
-      req.body.name || ""
+      req.body?.name || ""
     ).trim();
 
-    const email = normalizeEmail(
-      req.body.email
-    );
+    const email =
+      normalizeEmail(
+        req.body?.email
+      );
 
-    const password = String(
-      req.body.password || ""
-    );
+    const password =
+      String(
+        req.body?.password ||
+          ""
+      );
 
     if (
       !name ||
       !email ||
       !password
     ) {
-      return res.status(400).json({
-        message:
-          "Name, email and password are required",
-      });
+      return res
+        .status(400)
+        .json({
+          message:
+            "Name, email and password are required",
+        });
     }
 
     if (
       name.length < 2 ||
       name.length > 80
     ) {
-      return res.status(400).json({
-        message:
-          "Name must contain between 2 and 80 characters",
-      });
+      return res
+        .status(400)
+        .json({
+          message:
+            "Name must contain between 2 and 80 characters",
+        });
     }
-
-    if (!isValidEmail(email)) {
-      return res.status(400).json({
-        message:
-          "Enter a valid email address",
-      });
-    }
-
-    const passwordFailures =
-      validatePassword(password);
 
     if (
-      passwordFailures.length > 0
+      !isValidEmail(email)
     ) {
-      return res.status(400).json({
-        message: `Password must contain ${passwordFailures.join(
-          ", "
-        )}.`,
-      });
+      return res
+        .status(400)
+        .json({
+          message:
+            "Enter a valid email address",
+        });
+    }
+
+    const passwordValidation =
+      validatePassword(
+        password
+      );
+
+    if (
+      !passwordValidation.valid
+    ) {
+      return res
+        .status(400)
+        .json({
+          message:
+            passwordValidation.message,
+        });
     }
 
     const existingUser =
@@ -218,10 +294,12 @@ exports.register = async (
       });
 
     if (existingUser) {
-      return res.status(409).json({
-        message:
-          "An account already exists with this email",
-      });
+      return res
+        .status(409)
+        .json({
+          message:
+            "An account already exists with this email",
+        });
     }
 
     const hashedPassword =
@@ -237,9 +315,15 @@ exports.register = async (
       await User.create({
         name,
         email,
-        password: hashedPassword,
-        authProvider: "local",
-        emailVerified: false,
+
+        password:
+          hashedPassword,
+
+        authProvider:
+          "local",
+
+        emailVerified:
+          false,
 
         emailVerificationTokenHash:
           verification.tokenHash,
@@ -251,152 +335,244 @@ exports.register = async (
           verification.sentAt,
       });
 
-    await sendVerificationEmail({
-      to: createdUser.email,
-      name: createdUser.name,
-      otp: verification.otp,
+    try {
+      await sendVerificationEmail({
+        to:
+          createdUser.email,
 
-      expiresInMinutes:
-        OTP_EXPIRY_MINUTES,
-    });
+        name:
+          createdUser.name,
 
-    return res.status(201).json({
-      message:
-        "Account created. Check your email for the verification code.",
+        otp:
+          verification.otp,
 
-      requiresEmailVerification:
-        true,
+        expiresInMinutes:
+          OTP_EXPIRY_MINUTES,
+      });
+    } catch (emailError) {
+      await User.deleteOne({
+        _id:
+          createdUser._id,
 
-      email: createdUser.email,
-    });
+        emailVerified:
+          false,
+      });
+
+      console.error(
+        "Registration email failed:",
+        safeErrorDetails(
+          emailError
+        )
+      );
+
+      return res
+        .status(502)
+        .json({
+          message:
+            "Unable to send verification email. Please try again later.",
+
+          code:
+            "EMAIL_DELIVERY_FAILED",
+        });
+    }
+
+    return res
+      .status(201)
+      .json({
+        message:
+          "Account created. Check your email for the verification code.",
+
+        requiresEmailVerification:
+          true,
+
+        email:
+          createdUser.email,
+      });
   } catch (error) {
     console.error(
       "Register error:",
-      error
+      safeErrorDetails(error)
     );
 
-    if (createdUser?._id) {
+    if (
+      createdUser?._id
+    ) {
       await User.deleteOne({
-        _id: createdUser._id,
-        emailVerified: false,
+        _id:
+          createdUser._id,
+
+        emailVerified:
+          false,
       }).catch(
         (cleanupError) => {
           console.error(
             "Registration cleanup error:",
-            cleanupError
+            safeErrorDetails(
+              cleanupError
+            )
           );
         }
       );
     }
 
-    if (error.code === 11000) {
-      return res.status(409).json({
-        message:
-          "An account already exists with this email",
-      });
+    if (
+      error?.code === 11000
+    ) {
+      return res
+        .status(409)
+        .json({
+          message:
+            "An account already exists with this email",
+        });
     }
 
-    return res.status(500).json({
-      message:
-        process.env.NODE_ENV ===
-        "production"
-          ? "Unable to create account"
-          : error.message ||
-            "Registration failed",
-    });
+    return res
+      .status(500)
+      .json({
+        message:
+          process.env
+            .NODE_ENV ===
+          "production"
+            ? "Unable to create account"
+            : error?.message ||
+              "Registration failed",
+      });
   }
 };
 
-// VERIFY EMAIL OTP
+/* -------------------------------------------------------------------------- */
+/*                           VERIFY EMAIL OTP                                 */
+/* -------------------------------------------------------------------------- */
+
 exports.verifyEmail = async (
   req,
   res
 ) => {
   try {
-    const email = normalizeEmail(
-      req.body.email
-    );
+    const email =
+      normalizeEmail(
+        req.body?.email
+      );
 
     const otp = String(
-      req.body.otp || ""
+      req.body?.otp || ""
     ).trim();
 
     if (
-      !email ||
+      !isValidEmail(email) ||
       !/^\d{6}$/.test(otp)
     ) {
-      return res.status(400).json({
-        message:
-          "Email and a valid 6-digit verification code are required",
-      });
+      return res
+        .status(400)
+        .json({
+          message:
+            "Email and a valid 6-digit verification code are required",
+        });
     }
 
     const user =
       await User.findOne({
         email,
       }).select(
-        "+emailVerificationTokenHash " +
-          "+emailVerificationExpiresAt"
+        [
+          "name",
+          "email",
+          "emailVerified",
+          "authProvider",
+          "+emailVerificationTokenHash",
+          "+emailVerificationExpiresAt",
+          "+emailVerificationSentAt",
+        ].join(" ")
       );
 
     if (!user) {
-      return res.status(400).json({
-        message:
-          "Invalid or expired verification code",
-      });
-    }
-
-    if (user.emailVerified) {
-      return res.status(200).json({
-        message:
-          "Email is already verified. You can log in.",
-      });
+      return res
+        .status(400)
+        .json({
+          message:
+            "Invalid or expired verification code",
+        });
     }
 
     if (
-      !user.emailVerificationTokenHash ||
-      !user.emailVerificationExpiresAt ||
-      user.emailVerificationExpiresAt.getTime() <=
-        Date.now()
+      user.emailVerified
     ) {
-      return res.status(400).json({
-        message:
-          "Verification code expired. Request a new code.",
-
-        code: "OTP_EXPIRED",
-      });
+      return res
+        .status(200)
+        .json({
+          message:
+            "Email is already verified. You can log in.",
+        });
     }
 
-    const suppliedHash =
-      Buffer.from(
-        hashOtp(otp),
-        "hex"
-      );
+    if (
+      !user
+        .emailVerificationTokenHash ||
+      !user
+        .emailVerificationExpiresAt
+    ) {
+      return res
+        .status(400)
+        .json({
+          message:
+            "Verification code expired. Request a new code.",
 
-    const storedHash =
-      Buffer.from(
-        user.emailVerificationTokenHash,
-        "hex"
-      );
+          code:
+            "OTP_EXPIRED",
+        });
+    }
+
+    if (
+      new Date(
+        user.emailVerificationExpiresAt
+      ).getTime() <=
+      Date.now()
+    ) {
+      user.emailVerificationTokenHash =
+        undefined;
+
+      user.emailVerificationExpiresAt =
+        undefined;
+
+      user.emailVerificationSentAt =
+        undefined;
+
+      await user.save({
+        validateBeforeSave:
+          false,
+      });
+
+      return res
+        .status(400)
+        .json({
+          message:
+            "Verification code expired. Request a new code.",
+
+          code:
+            "OTP_EXPIRED",
+        });
+    }
 
     const matches =
-      suppliedHash.length ===
-        storedHash.length &&
-      crypto.timingSafeEqual(
-        suppliedHash,
-        storedHash
+      otpMatches(
+        otp,
+        user.emailVerificationTokenHash
       );
 
     if (!matches) {
-      return res.status(400).json({
-        message:
-          "Invalid verification code",
+      return res
+        .status(400)
+        .json({
+          message:
+            "Invalid verification code",
 
-        code: "INVALID_OTP",
-      });
+          code:
+            "INVALID_OTP",
+        });
     }
 
-    user.emailVerified = true;
+    user.emailVerified =
+      true;
 
     user.emailVerificationTokenHash =
       undefined;
@@ -407,36 +583,46 @@ exports.verifyEmail = async (
     user.emailVerificationSentAt =
       undefined;
 
-    await user.save();
-
-    return res.status(200).json({
-      message:
-        "Email verified successfully. You can now log in.",
+    // Password is select:false, so normal save
+    // validation may incorrectly fail for local users.
+    await user.save({
+      validateBeforeSave: false,
     });
+
+    return res
+      .status(200)
+      .json({
+        message:
+          "Email verified successfully. You can now log in.",
+      });
   } catch (error) {
     console.error(
       "Verify email error:",
-      error
+      safeErrorDetails(error)
     );
 
-    return res.status(500).json({
-      message:
-        "Unable to verify email",
-    });
+    return res
+      .status(500)
+      .json({
+        message:
+          "Unable to verify email",
+      });
   }
 };
 
-// RESEND VERIFICATION OTP
+/* -------------------------------------------------------------------------- */
+/*                        RESEND VERIFICATION OTP                              */
+/* -------------------------------------------------------------------------- */
+
 exports.resendVerificationEmail =
   async (req, res) => {
     try {
       const email =
         normalizeEmail(
-          req.body.email
+          req.body?.email
         );
 
       if (
-        !email ||
         !isValidEmail(email)
       ) {
         return res
@@ -451,9 +637,15 @@ exports.resendVerificationEmail =
         await User.findOne({
           email,
         }).select(
-          "+emailVerificationTokenHash " +
-            "+emailVerificationExpiresAt " +
-            "+emailVerificationSentAt"
+          [
+            "name",
+            "email",
+            "emailVerified",
+            "authProvider",
+            "+emailVerificationTokenHash",
+            "+emailVerificationExpiresAt",
+            "+emailVerificationSentAt",
+          ].join(" ")
         );
 
       if (!user) {
@@ -465,7 +657,21 @@ exports.resendVerificationEmail =
           });
       }
 
-      if (user.emailVerified) {
+      if (
+        user.authProvider !==
+        "local"
+      ) {
+        return res
+          .status(400)
+          .json({
+            message:
+              "Google accounts do not require email verification",
+          });
+      }
+
+      if (
+        user.emailVerified
+      ) {
         return res
           .status(400)
           .json({
@@ -483,7 +689,8 @@ exports.resendVerificationEmail =
 
       const secondsSinceLastSend =
         Math.floor(
-          (Date.now() - sentAt) /
+          (Date.now() -
+            sentAt) /
             1000
         );
 
@@ -491,15 +698,28 @@ exports.resendVerificationEmail =
         secondsSinceLastSend <
         RESEND_COOLDOWN_SECONDS
       ) {
+        const waitSeconds =
+          RESEND_COOLDOWN_SECONDS -
+          secondsSinceLastSend;
+
         return res
           .status(429)
           .json({
-            message: `Wait ${
-              RESEND_COOLDOWN_SECONDS -
-              secondsSinceLastSend
-            } seconds before requesting another code.`,
+            message: `Wait ${waitSeconds} seconds before requesting another code.`,
+
+            retryAfter:
+              waitSeconds,
           });
       }
+
+      const oldHash =
+        user.emailVerificationTokenHash;
+
+      const oldExpires =
+        user.emailVerificationExpiresAt;
+
+      const oldSentAt =
+        user.emailVerificationSentAt;
 
       const verification =
         createVerificationData();
@@ -513,27 +733,76 @@ exports.resendVerificationEmail =
       user.emailVerificationSentAt =
         verification.sentAt;
 
-      await user.save();
-
-      await sendVerificationEmail({
-        to: user.email,
-        name: user.name,
-        otp: verification.otp,
-
-        expiresInMinutes:
-          OTP_EXPIRY_MINUTES,
+      await user.save({
+        validateBeforeSave:
+          false,
       });
+
+      try {
+        await sendVerificationEmail({
+          to:
+            user.email,
+
+          name:
+            user.name,
+
+          otp:
+            verification.otp,
+
+          expiresInMinutes:
+            OTP_EXPIRY_MINUTES,
+        });
+      } catch (emailError) {
+        user.emailVerificationTokenHash =
+          oldHash;
+
+        user.emailVerificationExpiresAt =
+          oldExpires;
+
+        user.emailVerificationSentAt =
+          oldSentAt;
+
+        await user.save({
+          validateBeforeSave:
+            false,
+        });
+
+        console.error(
+          "Resend verification email failed:",
+          safeErrorDetails(
+            emailError
+          )
+        );
+
+        return res
+          .status(502)
+          .json({
+            message:
+              "Unable to send verification email. Please try again later.",
+
+            code:
+              "EMAIL_DELIVERY_FAILED",
+          });
+      }
 
       return res
         .status(200)
         .json({
           message:
             "A new verification code has been sent.",
+
+          email:
+            user.email,
+
+          expiresInMinutes:
+            OTP_EXPIRY_MINUTES,
         });
     } catch (error) {
       console.error(
-        "Resend verification email error:",
-        error
+        "Resend verification error:",
+        safeErrorDetails(
+          error
+        )
       );
 
       return res
@@ -545,40 +814,66 @@ exports.resendVerificationEmail =
     }
   };
 
-// LOGIN
+/* -------------------------------------------------------------------------- */
+/*                                  LOGIN                                     */
+/* -------------------------------------------------------------------------- */
+
 exports.login = async (
   req,
   res
 ) => {
   try {
-    const email = normalizeEmail(
-      req.body.email
-    );
+    const email =
+      normalizeEmail(
+        req.body?.email
+      );
 
-    const password = String(
-      req.body.password || ""
-    );
+    const password =
+      String(
+        req.body?.password ||
+          ""
+      );
 
-    if (!email || !password) {
-      return res.status(400).json({
-        message:
-          "Email and password are required",
-      });
+    if (
+      !email ||
+      !password
+    ) {
+      return res
+        .status(400)
+        .json({
+          message:
+            "Email and password are required",
+        });
+    }
+
+    if (
+      !isValidEmail(email)
+    ) {
+      return res
+        .status(401)
+        .json({
+          message:
+            "Invalid email or password",
+        });
     }
 
     const user =
       await User.findOne({
         email,
-      }).select("+password");
+      }).select(
+        "+password"
+      );
 
     if (
       !user ||
       !user.password
     ) {
-      return res.status(401).json({
-        message:
-          "Invalid email or password",
-      });
+      return res
+        .status(401)
+        .json({
+          message:
+            "Invalid email or password",
+        });
     }
 
     const passwordMatches =
@@ -587,11 +882,15 @@ exports.login = async (
         user.password
       );
 
-    if (!passwordMatches) {
-      return res.status(401).json({
-        message:
-          "Invalid email or password",
-      });
+    if (
+      !passwordMatches
+    ) {
+      return res
+        .status(401)
+        .json({
+          message:
+            "Invalid email or password",
+        });
     }
 
     if (
@@ -599,50 +898,70 @@ exports.login = async (
         "google" &&
       !user.emailVerified
     ) {
-      return res.status(403).json({
-        message:
-          "Please verify your email before signing in",
+      return res
+        .status(403)
+        .json({
+          message:
+            "Please verify your email before signing in",
 
-        code:
-          "EMAIL_NOT_VERIFIED",
+          code:
+            "EMAIL_NOT_VERIFIED",
 
-        email: user.email,
-      });
+          email:
+            user.email,
+        });
     }
 
     const token =
       createJwt(user);
 
-    return res.status(200).json({
-      message:
-        "Login successful",
+    return res
+      .status(200)
+      .json({
+        message:
+          "Login successful",
 
-      token,
+        token,
 
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
+        user: {
+          id:
+            user._id,
 
-        emailVerified:
-          Boolean(
-            user.emailVerified
-          ),
-      },
-    });
+          name:
+            user.name,
+
+          email:
+            user.email,
+
+          emailVerified:
+            Boolean(
+              user.emailVerified
+            ),
+
+          authProvider:
+            user.authProvider ||
+            "local",
+        },
+      });
   } catch (error) {
     console.error(
       "Login error:",
-      error
+      safeErrorDetails(error)
     );
 
-    return res.status(500).json({
-      message: "Login failed",
-    });
+    return res
+      .status(500)
+      .json({
+        message:
+          "Login failed",
+      });
   }
 };
 
-// GET CURRENT USER
+/* -------------------------------------------------------------------------- */
+/*                            GET CURRENT USER                                */
+/* -------------------------------------------------------------------------- */
+
 exports.getMe = async (
   req,
   res
@@ -652,19 +971,26 @@ exports.getMe = async (
       await User.findById(
         req.user.id
       ).select(
-        "-password -emailVerificationTokenHash"
+        [
+          "-password",
+          "-emailVerificationTokenHash",
+          "-passwordResetOtpHash",
+        ].join(" ")
       );
 
     if (!user) {
-      return res.status(404).json({
-        message:
-          "User not found",
-      });
+      return res
+        .status(404)
+        .json({
+          message:
+            "User not found",
+        });
     }
 
     const resumes =
       await Resume.find({
-        user: req.user.id,
+        user:
+          req.user.id,
       })
         .select(
           "filename analysis createdAt"
@@ -682,7 +1008,8 @@ exports.getMe = async (
             ...resumes.map(
               (resume) =>
                 Number(
-                  resume.analysis
+                  resume
+                    .analysis
                     ?.atsScore
                 ) || 0
             )
@@ -699,7 +1026,8 @@ exports.getMe = async (
               ) =>
                 total +
                 (Number(
-                  resume.analysis
+                  resume
+                    .analysis
                     ?.atsScore
                 ) || 0),
               0
@@ -709,7 +1037,10 @@ exports.getMe = async (
         : 0;
 
     const recentResumes =
-      resumes.slice(0, 5);
+      resumes.slice(
+        0,
+        5
+      );
 
     const activities =
       recentResumes.map(
@@ -724,77 +1055,95 @@ exports.getMe = async (
               ?.atsScore || 0
           }% ATS.`,
 
-          time: resume.createdAt
-            ? new Date(
-                resume.createdAt
-              ).toLocaleDateString()
-            : "Recently",
+          time:
+            resume.createdAt
+              ? new Date(
+                  resume.createdAt
+                ).toLocaleDateString()
+              : "Recently",
 
-          type: "analysis",
+          type:
+            "analysis",
         })
       );
 
-    return res.status(200).json({
-      id: user._id,
-      name: user.name,
-      email: user.email,
+    return res
+      .status(200)
+      .json({
+        id:
+          user._id,
 
-      emailVerified:
-        Boolean(
-          user.emailVerified
-        ),
+        name:
+          user.name,
 
-      authProvider:
-        user.authProvider ||
-        "local",
+        email:
+          user.email,
 
-      createdAt:
-        user.createdAt,
+        emailVerified:
+          Boolean(
+            user.emailVerified
+          ),
 
-      totalResumes,
-      highestATS,
-      averageATS,
-      recentResumes,
-      activities,
-    });
+        authProvider:
+          user.authProvider ||
+          "local",
+
+        createdAt:
+          user.createdAt,
+
+        totalResumes,
+        highestATS,
+        averageATS,
+        recentResumes,
+        activities,
+      });
   } catch (error) {
     console.error(
       "Get profile error:",
-      error
+      safeErrorDetails(error)
     );
 
-    return res.status(500).json({
-      message:
-        "Unable to load profile",
-    });
+    return res
+      .status(500)
+      .json({
+        message:
+          "Unable to load profile",
+      });
   }
 };
 
-// UPDATE PROFILE
+/* -------------------------------------------------------------------------- */
+/*                             UPDATE PROFILE                                 */
+/* -------------------------------------------------------------------------- */
+
 exports.updateProfile = async (
   req,
   res
 ) => {
   try {
     const name = String(
-      req.body.name || ""
+      req.body?.name || ""
     ).trim();
 
     if (!name) {
-      return res.status(400).json({
-        message:
-          "Name is required",
-      });
+      return res
+        .status(400)
+        .json({
+          message:
+            "Name is required",
+        });
     }
 
     if (
       name.length < 2 ||
       name.length > 80
     ) {
-      return res.status(400).json({
-        message:
-          "Name must contain between 2 and 80 characters",
-      });
+      return res
+        .status(400)
+        .json({
+          message:
+            "Name must contain between 2 and 80 characters",
+        });
     }
 
     const user =
@@ -807,105 +1156,137 @@ exports.updateProfile = async (
         },
         {
           new: true,
-          runValidators: true,
+          runValidators:
+            true,
         }
-      ).select("-password");
+      ).select(
+        "-password"
+      );
 
     if (!user) {
-      return res.status(404).json({
-        message:
-          "User not found",
-      });
+      return res
+        .status(404)
+        .json({
+          message:
+            "User not found",
+        });
     }
 
-    return res.status(200).json({
-      message:
-        "Profile updated successfully",
+    return res
+      .status(200)
+      .json({
+        message:
+          "Profile updated successfully",
 
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
+        user: {
+          id:
+            user._id,
 
-        emailVerified:
-          Boolean(
-            user.emailVerified
-          ),
-      },
-    });
+          name:
+            user.name,
+
+          email:
+            user.email,
+
+          emailVerified:
+            Boolean(
+              user.emailVerified
+            ),
+
+          authProvider:
+            user.authProvider ||
+            "local",
+        },
+      });
   } catch (error) {
     console.error(
       "Update profile error:",
-      error
+      safeErrorDetails(error)
     );
 
-    return res.status(500).json({
-      message:
-        "Failed to update profile",
-    });
-  }
-};
-
-// GET SETTINGS
-exports.getPreferences = async (
-  req,
-  res
-) => {
-  try {
-    const user =
-      await User.findById(
-        req.user.id
-      ).select("preferences");
-
-    if (!user) {
-      return res.status(404).json({
+    return res
+      .status(500)
+      .json({
         message:
-          "User not found",
+          "Failed to update profile",
       });
-    }
-
-    return res.status(200).json({
-      preferences: {
-        theme:
-          user.preferences
-            ?.theme ||
-          "light",
-
-        sleepMode:
-          user.preferences
-            ?.sleepMode ??
-          false,
-
-        doNotDisturb:
-          user.preferences
-            ?.doNotDisturb ??
-          false,
-
-        analysisTips:
-          user.preferences
-            ?.analysisTips ??
-          true,
-
-        saveAnalysisLocally:
-          user.preferences
-            ?.saveAnalysisLocally ??
-          true,
-      },
-    });
-  } catch (error) {
-    console.error(
-      "Get preferences error:",
-      error
-    );
-
-    return res.status(500).json({
-      message:
-        "Failed to load preferences",
-    });
   }
 };
 
-// UPDATE SETTINGS
+/* -------------------------------------------------------------------------- */
+/*                            GET PREFERENCES                                 */
+/* -------------------------------------------------------------------------- */
+
+exports.getPreferences =
+  async (req, res) => {
+    try {
+      const user =
+        await User.findById(
+          req.user.id
+        ).select(
+          "preferences"
+        );
+
+      if (!user) {
+        return res
+          .status(404)
+          .json({
+            message:
+              "User not found",
+          });
+      }
+
+      return res
+        .status(200)
+        .json({
+          preferences: {
+            theme:
+              user.preferences
+                ?.theme ||
+              "light",
+
+            sleepMode:
+              user.preferences
+                ?.sleepMode ??
+              false,
+
+            doNotDisturb:
+              user.preferences
+                ?.doNotDisturb ??
+              false,
+
+            analysisTips:
+              user.preferences
+                ?.analysisTips ??
+              true,
+
+            saveAnalysisLocally:
+              user.preferences
+                ?.saveAnalysisLocally ??
+              true,
+          },
+        });
+    } catch (error) {
+      console.error(
+        "Get preferences error:",
+        safeErrorDetails(
+          error
+        )
+      );
+
+      return res
+        .status(500)
+        .json({
+          message:
+            "Failed to load preferences",
+        });
+    }
+  };
+
+/* -------------------------------------------------------------------------- */
+/*                           UPDATE PREFERENCES                               */
+/* -------------------------------------------------------------------------- */
+
 exports.updatePreferences =
   async (req, res) => {
     try {
@@ -915,7 +1296,7 @@ exports.updatePreferences =
         doNotDisturb,
         analysisTips,
         saveAnalysisLocally,
-      } = req.body;
+      } = req.body || {};
 
       const updates = {};
 
@@ -992,11 +1373,13 @@ exports.updatePreferences =
         await User.findByIdAndUpdate(
           req.user.id,
           {
-            $set: updates,
+            $set:
+              updates,
           },
           {
             new: true,
-            runValidators: true,
+            runValidators:
+              true,
           }
         ).select(
           "preferences"
@@ -1023,7 +1406,9 @@ exports.updatePreferences =
     } catch (error) {
       console.error(
         "Update preferences error:",
-        error
+        safeErrorDetails(
+          error
+        )
       );
 
       return res
@@ -1035,67 +1420,98 @@ exports.updatePreferences =
     }
   };
 
-  // DELETE CURRENT USER ACCOUNT
-exports.deleteAccount = async (req, res) => {
+/* -------------------------------------------------------------------------- */
+/*                             DELETE ACCOUNT                                 */
+/* -------------------------------------------------------------------------- */
+
+exports.deleteAccount = async (
+  req,
+  res
+) => {
   try {
-    const userId = req.user?.id;
+    const userId =
+      req.user?.id;
 
     if (!userId) {
-      return res.status(401).json({
-        message: "Unauthorized",
-      });
+      return res
+        .status(401)
+        .json({
+          message:
+            "Unauthorized",
+        });
     }
 
-    const confirmation = String(
-      req.body?.confirmation || ""
-    )
-      .trim()
-      .toUpperCase();
+    const confirmation =
+      String(
+        req.body
+          ?.confirmation || ""
+      )
+        .trim()
+        .toUpperCase();
 
-    if (confirmation !== "DELETE") {
-      return res.status(400).json({
-        message:
-          'Enter "DELETE" to confirm account deletion',
-      });
+    if (
+      confirmation !==
+      "DELETE"
+    ) {
+      return res
+        .status(400)
+        .json({
+          message:
+            'Enter "DELETE" to confirm account deletion',
+        });
     }
 
-    const user = await User.findById(userId).select(
-      "+password authProvider"
-    );
-
-    if (!user) {
-      return res.status(404).json({
-        message: "User not found",
-      });
-    }
-
-    // Local accounts must verify their password.
-    if (user.authProvider === "local") {
-      const password = String(
-        req.body?.password || ""
+    const user =
+      await User.findById(
+        userId
+      ).select(
+        "+password authProvider"
       );
 
-      if (!password) {
-        return res.status(400).json({
+    if (!user) {
+      return res
+        .status(404)
+        .json({
           message:
-            "Password is required to delete this account",
+            "User not found",
         });
+    }
+
+    if (
+      user.authProvider ===
+      "local"
+    ) {
+      const password =
+        String(
+          req.body
+            ?.password || ""
+        );
+
+      if (!password) {
+        return res
+          .status(400)
+          .json({
+            message:
+              "Password is required to delete this account",
+          });
       }
 
-      const passwordMatches =
+      const matches =
         await bcrypt.compare(
           password,
           user.password
         );
 
-      if (!passwordMatches) {
-        return res.status(401).json({
-          message: "Incorrect password",
-        });
+      if (!matches) {
+        return res
+          .status(401)
+          .json({
+            message:
+              "Incorrect password",
+          });
       }
     }
 
-    // Delete all data owned by this user.
     await Promise.all([
       Resume.deleteMany({
         user: userId,
@@ -1110,193 +1526,331 @@ exports.deleteAccount = async (req, res) => {
       }),
     ]);
 
-    await User.findByIdAndDelete(userId);
+    await User.findByIdAndDelete(
+      userId
+    );
 
-    return res.status(200).json({
-      message:
-        "Account and associated data deleted successfully",
-    });
+    return res
+      .status(200)
+      .json({
+        message:
+          "Account and associated data deleted successfully",
+      });
   } catch (error) {
     console.error(
       "Delete account error:",
-      error.message
+      safeErrorDetails(error)
     );
 
-    return res.status(500).json({
-      message:
-        "Unable to delete account",
-    });
+    return res
+      .status(500)
+      .json({
+        message:
+          "Unable to delete account",
+      });
   }
 };
 
-exports.forgotPassword = async (
-  req,
-  res
-) => {
-  const genericResponse = {
-    message:
-      "If an eligible account exists, a password reset code has been sent.",
-  };
+/* -------------------------------------------------------------------------- */
+/*                     FORGOT PASSWORD — SEND OTP                             */
+/* -------------------------------------------------------------------------- */
 
-  try {
-    const email = String(
-      req.body?.email || ""
-    )
-      .trim()
-      .toLowerCase();
-
-    if (!email) {
-      return res.status(400).json({
-        message:
-          "Email is required",
-      });
-    }
-
-    const user =
-      await User.findOne({
-        email,
-      }).select(
-        "+passwordResetOtpHash +passwordResetOtpExpires +passwordResetAttempts"
-      );
-
-    // Do not reveal whether the email exists.
-    if (
-      !user ||
-      user.authProvider !== "local"
-    ) {
-      return res
-        .status(200)
-        .json(genericResponse);
-    }
-
-    const otp =
-      createOtp();
-
-    user.passwordResetOtpHash =
-      hashOtp(otp);
-
-    user.passwordResetOtpExpires =
-      new Date(
-        Date.now() +
-          10 * 60 * 1000
-      );
-
-    user.passwordResetAttempts = 0;
-
-    await user.save({
-      validateBeforeSave: false,
-    });
+exports.forgotPassword =
+  async (req, res) => {
+    const genericResponse = {
+      message:
+        "If an eligible account exists, a password reset code has been sent.",
+    };
 
     try {
-      await sendPasswordResetEmail({
-        to: user.email,
-        name: user.name,
-        otp,
-        expiresInMinutes: 10,
-      });
-    } catch (emailError) {
+      const email =
+        normalizeEmail(
+          req.body?.email
+        );
+
+      if (!email) {
+        return res
+          .status(400)
+          .json({
+            message:
+              "Email is required",
+          });
+      }
+
+      if (
+        !isValidEmail(email)
+      ) {
+        return res
+          .status(400)
+          .json({
+            message:
+              "Enter a valid email address",
+          });
+      }
+
+      const user =
+        await User.findOne({
+          email,
+        }).select(
+          [
+            "name",
+            "email",
+            "authProvider",
+            "emailVerified",
+            "+passwordResetOtpHash",
+            "+passwordResetOtpExpires",
+            "+passwordResetAttempts",
+          ].join(" ")
+        );
+
+      // Prevent account enumeration.
+      if (!user) {
+        return res
+          .status(200)
+          .json(
+            genericResponse
+          );
+      }
+
+      // Google-only accounts have no local password.
+      if (
+        user.authProvider !==
+        "local"
+      ) {
+        return res
+          .status(200)
+          .json(
+            genericResponse
+          );
+      }
+
+      if (
+        !user.emailVerified
+      ) {
+        return res
+          .status(403)
+          .json({
+            message:
+              "Verify your email before resetting your password",
+
+            code:
+              "EMAIL_NOT_VERIFIED",
+
+            email:
+              user.email,
+          });
+      }
+
+      const otp =
+        createOtp();
+
       user.passwordResetOtpHash =
-        undefined;
+        hashOtp(otp);
 
       user.passwordResetOtpExpires =
-        undefined;
+        new Date(
+          Date.now() +
+            OTP_EXPIRY_MINUTES *
+              60 *
+              1000
+        );
 
-      user.passwordResetAttempts = 0;
+      user.passwordResetAttempts =
+        0;
 
       await user.save({
-        validateBeforeSave: false,
+        validateBeforeSave:
+          false,
       });
 
+      try {
+        await sendPasswordResetEmail({
+          to:
+            user.email,
+
+          name:
+            user.name,
+
+          otp,
+
+          expiresInMinutes:
+            OTP_EXPIRY_MINUTES,
+        });
+      } catch (emailError) {
+        user.passwordResetOtpHash =
+          undefined;
+
+        user.passwordResetOtpExpires =
+          undefined;
+
+        user.passwordResetAttempts =
+          0;
+
+        await user.save({
+          validateBeforeSave:
+            false,
+        });
+
+        console.error(
+          "Password reset email failed:",
+          safeErrorDetails(
+            emailError
+          )
+        );
+
+        return res
+          .status(502)
+          .json({
+            message:
+              "Unable to send password reset email. Please try again later.",
+
+            code:
+              "EMAIL_DELIVERY_FAILED",
+          });
+      }
+
+      return res
+        .status(200)
+        .json({
+          message:
+            "Password reset code sent successfully. Check your email.",
+
+          email:
+            user.email,
+
+          expiresInMinutes:
+            OTP_EXPIRY_MINUTES,
+        });
+    } catch (error) {
       console.error(
-        "Password reset email failed:",
-        emailError.message
+        "Forgot password error:",
+        safeErrorDetails(
+          error
+        )
       );
+
+      return res
+        .status(500)
+        .json({
+          message:
+            "Unable to process the password reset request",
+
+          code:
+            "PASSWORD_RESET_REQUEST_FAILED",
+        });
     }
+  };
 
-    return res
-      .status(200)
-      .json(genericResponse);
-  } catch (error) {
-    console.error(
-      "Forgot password error:",
-      error.message
-    );
-
-    return res
-      .status(200)
-      .json(genericResponse);
-  }
-};
+/* -------------------------------------------------------------------------- */
+/*                         RESET PASSWORD                                     */
+/* -------------------------------------------------------------------------- */
 
 exports.resetPassword = async (
   req,
   res
 ) => {
   try {
-    const email = String(
-      req.body?.email || ""
-    )
-      .trim()
-      .toLowerCase();
+    const email =
+      normalizeEmail(
+        req.body?.email
+      );
 
     const otp = String(
       req.body?.otp || ""
     ).trim();
 
-    const newPassword = String(
-      req.body?.newPassword || ""
-    );
+    const newPassword =
+      String(
+        req.body
+          ?.newPassword || ""
+      );
 
     if (
       !email ||
       !otp ||
       !newPassword
     ) {
-      return res.status(400).json({
-        message:
-          "Email, verification code and new password are required",
-      });
-    }
-
-    if (!/^\d{6}$/.test(otp)) {
-      return res.status(400).json({
-        message:
-          "Verification code must contain 6 digits",
-      });
+      return res
+        .status(400)
+        .json({
+          message:
+            "Email, verification code and new password are required",
+        });
     }
 
     if (
-      !isStrongPassword(
-        newPassword
-      )
+      !isValidEmail(email)
     ) {
-      return res.status(400).json({
-        message:
-          "Password must contain at least 8 characters, including uppercase, lowercase, number and special character",
-      });
+      return res
+        .status(400)
+        .json({
+          message:
+            "Enter a valid email address",
+        });
+    }
+
+    if (
+      !/^\d{6}$/.test(otp)
+    ) {
+      return res
+        .status(400)
+        .json({
+          message:
+            "Verification code must contain 6 digits",
+        });
+    }
+
+    const passwordValidation =
+      validatePassword(
+        newPassword
+      );
+
+    if (
+      !passwordValidation.valid
+    ) {
+      return res
+        .status(400)
+        .json({
+          message:
+            passwordValidation.message,
+        });
     }
 
     const user =
       await User.findOne({
         email,
-        authProvider: "local",
+        authProvider:
+          "local",
       }).select(
-        "+password +passwordResetOtpHash +passwordResetOtpExpires +passwordResetAttempts"
+        [
+          "+password",
+          "+passwordResetOtpHash",
+          "+passwordResetOtpExpires",
+          "+passwordResetAttempts",
+        ].join(" ")
       );
 
     if (
       !user ||
-      !user.passwordResetOtpHash ||
-      !user.passwordResetOtpExpires
+      !user
+        .passwordResetOtpHash ||
+      !user
+        .passwordResetOtpExpires
     ) {
-      return res.status(400).json({
-        message:
-          "Invalid or expired verification code",
-      });
+      return res
+        .status(400)
+        .json({
+          message:
+            "Invalid or expired verification code",
+        });
     }
 
     if (
-      user.passwordResetAttempts >= 5
+      Number(
+        user.passwordResetAttempts ||
+          0
+      ) >=
+      MAX_RESET_ATTEMPTS
     ) {
       user.passwordResetOtpHash =
         undefined;
@@ -1304,20 +1858,26 @@ exports.resetPassword = async (
       user.passwordResetOtpExpires =
         undefined;
 
-      user.passwordResetAttempts = 0;
+      user.passwordResetAttempts =
+        0;
 
       await user.save({
-        validateBeforeSave: false,
+        validateBeforeSave:
+          false,
       });
 
-      return res.status(429).json({
-        message:
-          "Too many incorrect attempts. Request a new code.",
-      });
+      return res
+        .status(429)
+        .json({
+          message:
+            "Too many incorrect attempts. Request a new code.",
+        });
     }
 
     if (
-      user.passwordResetOtpExpires.getTime() <
+      new Date(
+        user.passwordResetOtpExpires
+      ).getTime() <=
       Date.now()
     ) {
       user.passwordResetOtpHash =
@@ -1326,61 +1886,75 @@ exports.resetPassword = async (
       user.passwordResetOtpExpires =
         undefined;
 
-      user.passwordResetAttempts = 0;
+      user.passwordResetAttempts =
+        0;
 
       await user.save({
-        validateBeforeSave: false,
+        validateBeforeSave:
+          false,
       });
 
-      return res.status(400).json({
-        message:
-          "Verification code expired. Request a new code.",
-      });
+      return res
+        .status(400)
+        .json({
+          message:
+            "Verification code expired. Request a new code.",
+        });
     }
 
-    const providedOtpHash =
-      hashOtp(otp);
-
-    const providedBuffer =
-      Buffer.from(
-        providedOtpHash,
-        "hex"
+    const matches =
+      otpMatches(
+        otp,
+        user.passwordResetOtpHash
       );
 
-    const storedBuffer =
-      Buffer.from(
-        user.passwordResetOtpHash,
-        "hex"
-      );
-
-    const otpMatches =
-      providedBuffer.length ===
-        storedBuffer.length &&
-      crypto.timingSafeEqual(
-        providedBuffer,
-        storedBuffer
-      );
-
-    if (!otpMatches) {
-      user.passwordResetAttempts += 1;
-
-      await user.save({
-        validateBeforeSave: false,
-      });
+    if (!matches) {
+      user.passwordResetAttempts =
+        Number(
+          user.passwordResetAttempts ||
+            0
+        ) + 1;
 
       const attemptsRemaining =
         Math.max(
           0,
-          5 -
+          MAX_RESET_ATTEMPTS -
             user.passwordResetAttempts
         );
 
-      return res.status(400).json({
-        message:
-          attemptsRemaining > 0
-            ? `Invalid verification code. ${attemptsRemaining} attempts remaining.`
-            : "Too many incorrect attempts. Request a new code.",
+      if (
+        attemptsRemaining ===
+        0
+      ) {
+        user.passwordResetOtpHash =
+          undefined;
+
+        user.passwordResetOtpExpires =
+          undefined;
+
+        user.passwordResetAttempts =
+          0;
+      }
+
+      await user.save({
+        validateBeforeSave:
+          false,
       });
+
+      return res
+        .status(
+          attemptsRemaining ===
+            0
+            ? 429
+            : 400
+        )
+        .json({
+          message:
+            attemptsRemaining >
+            0
+              ? `Invalid verification code. ${attemptsRemaining} attempts remaining.`
+              : "Too many incorrect attempts. Request a new code.",
+        });
     }
 
     user.password =
@@ -1398,25 +1972,31 @@ exports.resetPassword = async (
     user.passwordResetOtpExpires =
       undefined;
 
-    user.passwordResetAttempts = 0;
+    user.passwordResetAttempts =
+      0;
 
     await user.save({
-      validateBeforeSave: false,
+      validateBeforeSave:
+        false,
     });
 
-    return res.status(200).json({
-      message:
-        "Password reset successfully. You can now log in.",
-    });
+    return res
+      .status(200)
+      .json({
+        message:
+          "Password reset successfully. You can now log in.",
+      });
   } catch (error) {
     console.error(
       "Reset password error:",
-      error.message
+      safeErrorDetails(error)
     );
 
-    return res.status(500).json({
-      message:
-        "Unable to reset password",
-    });
+    return res
+      .status(500)
+      .json({
+        message:
+          "Unable to reset password",
+      });
   }
 };

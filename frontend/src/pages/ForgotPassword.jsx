@@ -104,7 +104,7 @@ function ForgotPassword() {
     useMemo(
       () => ({
         length:
-          newPassword.length >= 8,
+          newPassword.length >= 15,
 
         uppercase:
           /[A-Z]/.test(
@@ -523,6 +523,7 @@ function ForgotPassword() {
                 <div className="mt-5">
                   <label
                     htmlFor="new-password"
+                    placeholder="15 characters"
                     className="text-sm font-bold text-slate-200"
                   >
                     New password
