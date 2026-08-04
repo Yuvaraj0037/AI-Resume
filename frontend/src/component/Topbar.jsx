@@ -185,7 +185,7 @@ function Topbar() {
                   y: -8,
                   scale: 0.96,
                 }}
-                className={`absolute right-0 top-14 w-80 overflow-hidden rounded-2xl border shadow-2xl ${
+                className={`fixed left-4 right-4 top-20 overflow-hidden rounded-2xl border shadow-2xl sm:absolute sm:left-auto sm:right-0 sm:top-14 sm:w-80${
                   isDark
                     ? "border-slate-700 bg-slate-900 text-white"
                     : "border-white bg-white text-slate-900"

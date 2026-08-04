@@ -31,8 +31,6 @@ import {
   useAppearance,
 } from "../context/AppearanceContext";
 
-
-
 const menus = [
   {
     name: "Dashboard",
@@ -74,37 +72,40 @@ const menus = [
 function Sidebar() {
   const navigate = useNavigate();
 
-  const { logout } = useAuth();
+  const { logout } =
+    useAuth();
 
   const {
     theme,
     sleepMode,
   } = useAppearance();
 
-  const isDark = theme === "dark";
+  const isDark =
+    theme === "dark";
 
-  const logoX = useMotionValue(0);
-  const logoY = useMotionValue(0);
+  const logoX =
+    useMotionValue(0);
 
-  const smoothLogoX = useSpring(
-    logoX,
-    {
+  const logoY =
+    useMotionValue(0);
+
+  const smoothLogoX =
+    useSpring(logoX, {
       stiffness: 180,
       damping: 18,
       mass: 0.6,
-    }
-  );
+    });
 
-  const smoothLogoY = useSpring(
-    logoY,
-    {
+  const smoothLogoY =
+    useSpring(logoY, {
       stiffness: 180,
       damping: 18,
       mass: 0.6,
-    }
-  );
+    });
 
-  function handleLogoMove(event) {
+  function handleLogoMove(
+    event
+  ) {
     const bounds =
       event.currentTarget.getBoundingClientRect();
 
@@ -117,13 +118,20 @@ function Sidebar() {
       bounds.height / 2;
 
     const distanceX =
-      event.clientX - centerX;
+      event.clientX -
+      centerX;
 
     const distanceY =
-      event.clientY - centerY;
+      event.clientY -
+      centerY;
 
-    logoX.set(distanceX * 0.08);
-    logoY.set(distanceY * 0.08);
+    logoX.set(
+      distanceX * 0.08
+    );
+
+    logoY.set(
+      distanceY * 0.08
+    );
   }
 
   function handleLogoLeave() {
@@ -143,25 +151,32 @@ function Sidebar() {
     });
   }
 
-  const sidebarClass = sleepMode
-    ? "border-amber-400/10 bg-[#1d1a12]"
-    : isDark
-    ? "border-slate-700/50 bg-slate-950"
-    : "border-indigo-500/10 bg-slate-900";
+  const sidebarClass =
+    sleepMode
+      ? "border-amber-400/10 bg-[#1d1a12]"
+      : isDark
+        ? "border-slate-700/50 bg-slate-950"
+        : "border-indigo-500/10 bg-slate-900";
 
   return (
     <aside
-      className={`group/sidebar sticky top-0 z-50 flex h-screen w-20 shrink-0 flex-col overflow-hidden border-r px-3 py-6 text-white shadow-2xl transition-[width,padding,background-color] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] hover:w-72 hover:px-6 focus-within:w-72 focus-within:px-6 ${sidebarClass}`}
+      className={`group/sidebar sticky top-0 z-50 hidden h-screen w-20 shrink-0 flex-col overflow-hidden border-r px-3 py-6 text-white shadow-2xl transition-[width,padding,background-color] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] hover:w-72 hover:px-6 focus-within:w-72 focus-within:px-6 lg:flex ${sidebarClass}`}
     >
       {/* ResumeAI liquid logo */}
 
       <motion.button
         type="button"
         onClick={() =>
-          navigate("/dashboard")
+          navigate(
+            "/dashboard"
+          )
         }
-        onMouseMove={handleLogoMove}
-        onMouseLeave={handleLogoLeave}
+        onMouseMove={
+          handleLogoMove
+        }
+        onMouseLeave={
+          handleLogoLeave
+        }
         initial={{
           opacity: 0,
           y: -18,
@@ -218,8 +233,10 @@ function Sidebar() {
             }}
             transition={{
               duration: 7,
-              repeat: Infinity,
-              ease: "easeInOut",
+              repeat:
+                Infinity,
+              ease:
+                "easeInOut",
             }}
             whileHover={{
               scale: 1.08,
@@ -244,8 +261,10 @@ function Sidebar() {
               }}
               transition={{
                 duration: 2.8,
-                repeat: Infinity,
-                ease: "easeInOut",
+                repeat:
+                  Infinity,
+                ease:
+                  "easeInOut",
               }}
               className="absolute inset-1 rounded-full bg-white/20 blur-md"
             />
@@ -261,12 +280,15 @@ function Sidebar() {
               }}
               transition={{
                 duration: 8,
-                repeat: Infinity,
+                repeat:
+                  Infinity,
                 ease: "linear",
               }}
               className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-slate-950 text-indigo-300 shadow-lg"
             >
-              <Sparkles size={11} />
+              <Sparkles
+                size={11}
+              />
             </motion.span>
           </motion.div>
 
@@ -280,16 +302,19 @@ function Sidebar() {
 
               <motion.span
                 animate={{
-                  backgroundPosition: [
-                    "0% 50%",
-                    "100% 50%",
-                    "0% 50%",
-                  ],
+                  backgroundPosition:
+                    [
+                      "0% 50%",
+                      "100% 50%",
+                      "0% 50%",
+                    ],
                 }}
                 transition={{
                   duration: 4,
-                  repeat: Infinity,
-                  ease: "linear",
+                  repeat:
+                    Infinity,
+                  ease:
+                    "linear",
                 }}
                 className="bg-gradient-to-r from-indigo-300 via-fuchsia-300 to-cyan-300 bg-[length:200%_200%] bg-clip-text text-2xl font-black text-transparent"
               >
@@ -299,7 +324,8 @@ function Sidebar() {
 
             <motion.p
               initial={{
-                opacity: 0.65,
+                opacity:
+                  0.65,
               }}
               whileHover={{
                 opacity: 1,
@@ -307,7 +333,8 @@ function Sidebar() {
               }}
               className="mt-1 truncate text-xs font-medium tracking-wide text-slate-400"
             >
-              Build. Analyze. Improve.
+              Build. Analyze.
+              Improve.
             </motion.p>
           </div>
         </motion.div>
@@ -331,12 +358,18 @@ function Sidebar() {
 
       <nav className="flex-1 space-y-2 overflow-y-auto overflow-x-hidden">
         {menus.map(
-          (item, index) => {
-            const Icon = item.icon;
+          (
+            item,
+            index
+          ) => {
+            const Icon =
+              item.icon;
 
             return (
               <motion.div
-                key={item.path}
+                key={
+                  item.path
+                }
                 initial={{
                   opacity: 0,
                   x: -16,
@@ -347,12 +380,17 @@ function Sidebar() {
                 }}
                 transition={{
                   delay:
-                    index * 0.05,
+                    index *
+                    0.05,
                 }}
               >
                 <NavLink
-                  to={item.path}
-                  title={item.name}
+                  to={
+                    item.path
+                  }
+                  title={
+                    item.name
+                  }
                   className={({
                     isActive,
                   }) =>
@@ -372,7 +410,8 @@ function Sidebar() {
                           layoutId="active-sidebar-item"
                           className="absolute inset-0 bg-gradient-to-r from-white/10 to-transparent"
                           transition={{
-                            type: "spring",
+                            type:
+                              "spring",
                             stiffness: 380,
                             damping: 30,
                           }}
@@ -380,18 +419,24 @@ function Sidebar() {
                       )}
 
                       <Icon
-                        size={22}
+                        size={
+                          22
+                        }
                         className="relative z-10 shrink-0 transition-all duration-300 group-hover/item:scale-110 group-hover/item:rotate-3"
                       />
 
                       <span className="relative z-10 max-w-0 -translate-x-3 overflow-hidden whitespace-nowrap font-semibold opacity-0 transition-all duration-500 group-hover/sidebar:max-w-44 group-hover/sidebar:translate-x-0 group-hover/sidebar:opacity-100 group-focus-within/sidebar:max-w-44 group-focus-within/sidebar:translate-x-0 group-focus-within/sidebar:opacity-100">
-                        {item.name}
+                        {
+                          item.name
+                        }
                       </span>
 
                       {/* Collapsed tooltip */}
 
                       <span className="pointer-events-none fixed left-[76px] z-[100] hidden -translate-y-12 whitespace-nowrap rounded-lg bg-slate-950 px-3 py-2 text-xs font-semibold text-white opacity-0 shadow-xl transition-opacity group-hover/item:opacity-100">
-                        {item.name}
+                        {
+                          item.name
+                        }
                       </span>
                     </>
                   )}
@@ -407,7 +452,9 @@ function Sidebar() {
       <div className="border-t border-white/10 pt-5">
         <button
           type="button"
-          onClick={handleLogout}
+          onClick={
+            handleLogout
+          }
           title="Logout"
           className="group/logout flex w-full items-center justify-center gap-3 overflow-hidden rounded-2xl px-3 py-3.5 text-red-400 transition-all duration-300 hover:bg-red-500/10 hover:text-red-300 group-hover/sidebar:justify-start group-focus-within/sidebar:justify-start"
         >

@@ -1,27 +1,39 @@
 import Sidebar from "./Sidebar";
 import Topbar from "./Topbar";
-import { useAppearance } from "../context/AppearanceContext";
+import MobileNavigation from "./MobileNavigation";
 
-function DashboardLayout({ children }) {
-  const { theme, sleepMode } = useAppearance();
+import {
+  useAppearance,
+} from "../context/AppearanceContext";
 
-  const isDark = theme === "dark";
+function DashboardLayout({
+  children,
+}) {
+  const {
+    theme,
+    sleepMode,
+  } = useAppearance();
 
-  const backgroundClass = sleepMode
-    ? "bg-[#15130e] text-amber-50"
-    : isDark
-      ? "bg-slate-950 text-slate-100"
-      : "bg-slate-100 text-slate-900";
+  const isDark =
+    theme === "dark";
+
+  const backgroundClass =
+    sleepMode
+      ? "bg-[#15130e] text-amber-50"
+      : isDark
+        ? "bg-slate-950 text-slate-100"
+        : "bg-slate-100 text-slate-900";
 
   return (
     <div
-      className={`dashboard-shell flex min-h-screen transition-colors duration-500 ${backgroundClass}`}
+      className={`dashboard-shell flex min-h-screen overflow-x-hidden transition-colors duration-500 ${backgroundClass}`}
       data-dark={isDark}
       data-sleep={sleepMode}
     >
+      {/* Desktop sidebar */}
       <Sidebar />
 
-      <main className="relative min-w-0 flex-1 overflow-hidden">
+      <main className="relative min-w-0 flex-1 overflow-x-hidden">
         {/* Liquid background decorations */}
         <div
           aria-hidden="true"
@@ -52,14 +64,21 @@ function DashboardLayout({ children }) {
           />
         </div>
 
-        <div className="relative z-10">
+        <div className="relative z-10 min-h-screen">
           <Topbar />
 
-          <div className="dashboard-content p-5 sm:p-8">
+          {/*
+           * Extra bottom padding prevents the fixed
+           * mobile navigation from covering content.
+           */}
+          <div className="dashboard-content w-full p-4 pb-28 sm:p-6 sm:pb-28 md:p-8 md:pb-28 lg:pb-8">
             {children}
           </div>
         </div>
       </main>
+
+      {/* Mobile-only bottom navigation */}
+      <MobileNavigation />
     </div>
   );
 }
